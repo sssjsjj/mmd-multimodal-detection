@@ -1,0 +1,17 @@
+path: D:\data\Train2000
+train: D:\工作区\mmd_kit\splits\train.txt
+val: D:\工作区\mmd_kit\splits\val.txt
+channels: 7
+names:
+  0: person
+  1: boat
+  2: animal
+  3: seat
+  4: sign
+  5: bicycle
+  6: car
+  7: ball
+  8: light
+  9: garbage_can
+  10: uav
+  11: tricycle
