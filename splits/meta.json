@@ -1,0 +1,24 @@
+{
+  "mode": "hybrid",
+  "block": null,
+  "n_groups": 1178,
+  "train": 1396,
+  "val": 604,
+  "val_neighbor_leaks": 67,
+  "rare_class_moved": [],
+  "val_classes_missing": [],
+  "val_class_counts": {
+    "0": 344,
+    "1": 24,
+    "2": 255,
+    "3": 83,
+    "4": 141,
+    "5": 83,
+    "6": 129,
+    "7": 19,
+    "8": 121,
+    "9": 64,
+    "10": 48,
+    "11": 8
+  }
+}
