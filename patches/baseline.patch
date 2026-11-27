@@ -1,0 +1,187 @@
+﻿diff --git a/train_yolo_3modal.py b/train_yolo_3modal.py
+index 73a09ae..6de332b 100644
+--- a/train_yolo_3modal.py
++++ b/train_yolo_3modal.py
+@@ -1,4 +1,5 @@
+ from pathlib import Path
++import argparse
+ import random
+ 
+ import yaml
+@@ -101,28 +102,75 @@ def has_training_data(data_file):
+ 
+ def main():
+     """Check local data before constructing the model and starting training."""
+-    data_file = prepare_train_val_split(DATA_CONFIG)
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--epochs", type=int, default=50)
++    ap.add_argument("--imgsz", type=int, default=1024)
++    ap.add_argument("--batch", type=int, default=16)
++    ap.add_argument("--workers", type=int, default=1)
++    ap.add_argument("--name", default=RUN_NAME)
++    ap.add_argument("--model", default=str(MODEL_CONFIG))
++    ap.add_argument("--data", default=str(DATA_CONFIG))
++    ap.add_argument("--cache", action="store_true")
++    ap.add_argument("--resume", action="store_true")
++    ap.add_argument("--lr0", type=float, default=0.01)
++    ap.add_argument("--lrf", type=float, default=0.01)
++    ap.add_argument("--cos-lr", action="store_true")
++    ap.add_argument("--close-mosaic", type=int, default=10)
++    ap.add_argument("--patience", type=int, default=50)
++    ap.add_argument("--optimizer", default="auto")
++    ap.add_argument("--seed", type=int, default=0)
++    args = ap.parse_args()
++
++    # 若配置里已经给出预切分好的 train/val txt 列表，直接用，不再随机重切
++    data_file = Path(args.data)
++    config = YAML.load(data_file)
++    val_src = str(config.get("val") or "")
++    val_ok = False
++    if val_src.lower().endswith(".txt"):
++        p = Path(val_src) if Path(val_src).is_absolute() else (Path(config.get("path", ".")) / val_src)
++        val_ok = p.is_file() and bool(p.read_text(encoding="utf-8").strip())
++    if val_ok:
++        print(f"[split] 使用配置文件中的预切分列表: {val_src}")
++    else:
++        data_file = prepare_train_val_split(data_file)
++        print(f"[split] 已重新随机切分 70/30: {data_file}")
++
+     if not has_training_data(data_file):
+         return
+ 
+-    if TRAIN_DIR.exists():
+-        raise FileExistsError(f"Training directory already exists: {TRAIN_DIR}. Change RUN_NAME in multimodal_config.py.")
+-
+-    model = YOLO(str(MODEL_CONFIG))
++    train_dir = TRAIN_PROJECT / args.name
++    if train_dir.exists() and not args.resume:
++        raise FileExistsError(f"Training directory already exists: {train_dir}. Change --name.")
++
++    model = YOLO(args.model)
++    if args.resume:
++        last = train_dir / "weights" / "last.pt"
++        if last.exists():
++            print(f"[resume] 从 {last} 续训")
++            resumed = YOLO(str(last))
++            return resumed.train(resume=True, workers=args.workers, device=DEVICE)
++        print(f"[resume] 未找到 {last}，改为从头训练")
+     return model.train(
+         data=str(data_file),
+-        epochs=50,
+-        imgsz=1024,
+-        batch=16,
+-        workers=1,
++        epochs=args.epochs,
++        imgsz=args.imgsz,
++        batch=args.batch,
++        workers=args.workers,
+         device=DEVICE,
+         project=str(TRAIN_PROJECT),
+-        name=RUN_NAME,
++        name=args.name,
+         exist_ok=True,
+-        close_mosaic=10,
++        close_mosaic=args.close_mosaic,
+         pretrained=False,
+         plots=False,
++        cache=args.cache,
+         amp=True,
++        lr0=args.lr0,
++        lrf=args.lrf,
++        cos_lr=args.cos_lr,
++        patience=args.patience,
++        optimizer=args.optimizer,
++        seed=args.seed,
+     )
+ 
+ 
+diff --git a/ultralytics/cfg/datasets/multimodal.yaml b/ultralytics/cfg/datasets/multimodal.yaml
+index d027f0f..e397108 100644
+--- a/ultralytics/cfg/datasets/multimodal.yaml
++++ b/ultralytics/cfg/datasets/multimodal.yaml
+@@ -1,8 +1,7 @@
+-
+-path: .
+-train: data/Train2000/visible/
+-val: data/Test1000/visible/
+-test:
++path: D:/data
++train: D:/工作区/MMD_baseline/splits/train.txt
++val: D:/工作区/MMD_baseline/splits/val.txt
++test: D:/data/Test1000/visible
+ 
+ channels: 7 # RGB (3) + infrared (3) + depth (1)
+ 
+@@ -20,4 +19,3 @@ names:
+   9: garbage can
+   10: uav
+   11: tricycle
+-
+diff --git a/ultralytics/data/multimodal.py b/ultralytics/data/multimodal.py
+index e1178b7..b636f21 100644
+--- a/ultralytics/data/multimodal.py
++++ b/ultralytics/data/multimodal.py
+@@ -1,10 +1,18 @@
+ """Read spatially aligned visible, infrared, and depth images consistently."""
+ 
++import os
+ from pathlib import Path
+ 
+ import cv2
+ import numpy as np
+ 
++# 模态消融开关：MMD_DROP_MODALITIES="infrared,depth" 时，被丢弃的模态直接喂全零通道。
++# 通道数仍是 7，网络结构不变，因此这是"信息消融"——测的是这三个模态各自提供了多少信息，
++# 而不是架构差异。被丢弃的模态连读盘都省掉，消融跑起来更快。
++_DROP_MODALITIES = {
++    m.strip().lower() for m in os.environ.get("MMD_DROP_MODALITIES", "").split(",") if m.strip()
++}
++
+ 
+ def read_three_modal_image(filename):
+     """Load aligned RGB, infrared, and depth data as a seven-channel uint8 image."""
+@@ -14,7 +22,12 @@ def read_three_modal_image(filename):
+         raise ValueError(f"Expected an image inside a 'visible' directory: {visible}")
+     index = max(i for i, part in enumerate(parts[:-1]) if part == "visible")
+     images = []
++    shape_hw = None
+     for modality in ("visible", "infrared", "depth"):
++        if modality in _DROP_MODALITIES and shape_hw is not None:
++            channels = 1 if modality == "depth" else 3
++            images.append(np.zeros((*shape_hw, channels), dtype=np.uint8))
++            continue
+         paired = parts.copy()
+         paired[index] = modality
+         path = Path(*paired)
+@@ -23,6 +36,8 @@ def read_three_modal_image(filename):
+         image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED if modality == "depth" else cv2.IMREAD_COLOR)
+         if image is None:
+             raise ValueError(f"Unable to decode {modality} image: {path}")
++        if shape_hw is None:
++            shape_hw = image.shape[:2]
+         if modality == "depth":
+             if image.ndim == 3 and image.shape[2] == 1:
+                 image = image[:, :, 0]
+diff --git a/ultralytics/data/utils.py b/ultralytics/data/utils.py
+index 7c5254e..70f4daf 100644
+--- a/ultralytics/data/utils.py
++++ b/ultralytics/data/utils.py
+@@ -809,10 +809,13 @@ def save_dataset_cache_file(prefix: str, path: Path, x: dict, version: str):
+     """Save an Ultralytics dataset *.cache dictionary x to path."""
+     x["version"] = version  # add cache version
+     if is_dir_writeable(path.parent):
+-        if path.exists():
+-            path.unlink()  # remove *.cache file if exists
+-        with open(str(path), "wb") as file:  # context manager here fixes windows async np.save bug
+-            np.save(file, x)
+-        LOGGER.info(f"{prefix}New cache created: {path}")
++        try:
++            if path.exists():
++                path.unlink()  # remove *.cache file if exists
++            with open(str(path), "wb") as file:  # context manager here fixes windows async np.save bug
++                np.save(file, x)
++            LOGGER.info(f"{prefix}New cache created: {path}")
++        except OSError as e:  # 只读数据集目录 / 沙箱限制：缓存写不了不影响训练，直接跳过
++            LOGGER.warning(f"{prefix}Cache not saved to {path}: {e}")
+     else:
+         LOGGER.warning(f"{prefix}Cache directory {path.parent} is not writable, cache not saved.")
