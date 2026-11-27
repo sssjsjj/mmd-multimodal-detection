@@ -1,0 +1,30 @@
+# 训练产物
+runs/
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# 数据与环境
+data/
+.venv/
+venv/
+wheels/
+__pycache__/
+*.pyc
+pip-unpack-*/
+pip-metadata-*/
+
+# 预测与中间产物
+submit*/
+sub_*/
+fuse_*/
+sweep_*/
+_raw_*/
+*.log
+*.json
+!splits/meta.json
+
+# 系统
+.DS_Store
+Thumbs.db
